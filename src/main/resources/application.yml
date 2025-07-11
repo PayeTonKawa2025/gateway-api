@@ -1,0 +1,26 @@
+server:
+  port: 8080
+
+spring:
+  cloud:
+    gateway:
+      routes:
+        - id: auth-service
+          uri: http://auth-service:8084
+          predicates:
+            - Path=/api/auth/**
+        - id: products-api
+          uri: http://products-api:8085
+          predicates:
+            - Path=/api/products/**
+
+  security:
+    enabled: false
+
+auth:
+  jwt:
+    public-key: classpath:public.pem
+
+logging:
+  level:
+    root: DEBUG
