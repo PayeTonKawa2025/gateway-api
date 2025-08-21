@@ -1,26 +1,109 @@
 server:
-  port: 8089
+  port: ${GATEWAY_PORT:8089}
 
 spring:
   cloud:
     gateway:
+      httpclient:
+        connect-timeout: ${GATEWAY_CONNECT_TIMEOUT:2000}
+        response-timeout: ${GATEWAY_RESPONSE_TIMEOUT:8s}
+        pool:
+          type: ${GATEWAY_POOL_TYPE:elastic}
+          max-idle-time: ${GATEWAY_POOL_MAX_IDLE:30s}
+          eviction-interval: ${GATEWAY_POOL_EVICTION_INTERVAL:30s}
+
       routes:
         - id: auth-service
-          uri: http://auth-service:8084
-          predicates:
-            - Path=/api/auth/**
-        - id: products-api
-          uri: http://products-api:8085
+          uri: ${AUTH_SERVICE_URI:http://auth-service:8084}
+          predicates: [ Path=/api/auth/** ]
+
+        - id: products-api-read
+          uri: ${PRODUCTS_API_URI:http://products-api:8085}
           predicates:
             - Path=/api/products/**
+            - Method=GET
+          filters:
+            - AddResponseHeader=Cache-Control, ${READ_CACHE_CONTROL:public, max-age=30}
+
+        - id: products-api-write
+          uri: ${PRODUCTS_API_URI:http://products-api:8085}
+          predicates:
+            - Path=/api/products/**
+            - Method=POST,PUT,PATCH,DELETE
+
+        - id: clients-api-read
+          uri: ${CLIENTS_API_URI:http://clients-api:8086}
+          predicates:
+            - Path=/api/clients/**
+            - Method=GET
+          filters:
+            - AddResponseHeader=Cache-Control, ${READ_CACHE_CONTROL:public, max-age=30}
+
+        - id: clients-api-write
+          uri: ${CLIENTS_API_URI:http://clients-api:8086}
+          predicates:
+            - Path=/api/clients/**
+            - Method=POST,PUT,PATCH,DELETE
+
+        - id: orders-api-read
+          uri: ${ORDERS_API_URI:http://orders-api:8087}
+          predicates:
+            - Path=/api/orders/**
+            - Method=GET
+          filters:
+            - AddResponseHeader=Cache-Control, ${READ_CACHE_CONTROL:public, max-age=30}
+
+        - id: orders-api-write
+          uri: ${ORDERS_API_URI:http://orders-api:8087}
+          predicates:
+            - Path=/api/orders/**
+            - Method=POST,PUT,PATCH,DELETE
 
   security:
-    enabled: false
+    enabled: ${SECURITY_ENABLED:false}
 
 auth:
   jwt:
-    public-key: classpath:public.pem
+    public-key: ${JWT_PUBLIC_KEY_PATH:classpath:public.pem}
+
+secured:
+  routes:
+    - path: /api/products
+      methods: [ POST ]
+      roles: [ ${ROLE_ADMIN:ADMIN} ]
+
+    - path: /api/products/**
+      methods: [ PUT, PATCH, DELETE ]
+      roles: [ ${ROLE_ADMIN:ADMIN} ]
+
+    - path: /api/orders/**
+      methods: [ DELETE ]
+      roles: [ ${ROLE_ADMIN:ADMIN} ]
+
+resilience4j:
+  timelimiter:
+    instances:
+      default:
+        timeoutDuration: ${R4J_TIME_LIMITER_TIMEOUT:5s}
+  circuitbreaker:
+    instances:
+      products:
+        slidingWindowSize: ${R4J_CB_SLIDING_WINDOW:20}
+        failureRateThreshold: ${R4J_CB_FAILURE_THRESHOLD:50}
+        waitDurationInOpenState: ${R4J_CB_WAIT_OPEN:10s}
+  ratelimiter:
+    instances:
+      per-client:
+        limitForPeriod: ${R4J_RL_LIMIT:50}
+        limitRefreshPeriod: ${R4J_RL_REFRESH:1s}
+        timeoutDuration: ${R4J_RL_TIMEOUT:0}
 
 logging:
   level:
-    root: DEBUG
+    root: ${LOG_LEVEL_ROOT:DEBUG}
+    org.springframework.cloud.gateway: ${LOG_LEVEL_GATEWAY:INFO}
+    org.springframework.web: ${LOG_LEVEL_WEB:DEBUG}
+    com.paye_ton_kawa: ${LOG_LEVEL_APP:DEBUG}
+    org.springframework.amqp: ${LOG_LEVEL_AMQP:DEBUG}
+    org.springframework.amqp.rabbit.core.RabbitTemplate: ${LOG_LEVEL_RABBIT_TEMPLATE:DEBUG}
+    org.springframework.amqp.rabbit.listener: ${LOG_LEVEL_RABBIT_LISTENER:DEBUG}

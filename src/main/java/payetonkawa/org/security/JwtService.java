@@ -1,6 +1,9 @@
 package payetonkawa.org.security;
 
-import io.jsonwebtoken.Jwts;
+import com.github.benmanes.caffeine.cache.Cache;
+import io.jsonwebtoken.*;
+import io.jsonwebtoken.security.SignatureException;
+import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -10,42 +13,40 @@ import org.springframework.stereotype.Service;
 import java.io.InputStream;
 import java.security.KeyFactory;
 import java.security.PublicKey;
+import java.security.interfaces.RSAPublicKey;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 
 @Service
+@RequiredArgsConstructor
 public class JwtService {
 
-    private static final Logger logger = LoggerFactory.getLogger(JwtService.class);
+    private static final Logger log = LoggerFactory.getLogger(JwtService.class);
 
     @Value("${auth.jwt.public-key}")
     private Resource publicKeyResource;
 
     private volatile PublicKey publicKey;
 
+    private final Cache<String, Claims> tokenClaimsCache;
+
     private PublicKey getPublicKey() {
         if (publicKey == null) {
             synchronized (this) {
                 if (publicKey == null) {
                     try (InputStream is = publicKeyResource.getInputStream()) {
-                        logger.info("JwtService: Loading public key from resource {}", publicKeyResource.getFilename());
-
                         String key = new String(is.readAllBytes())
                                 .replace("-----BEGIN PUBLIC KEY-----", "")
                                 .replace("-----END PUBLIC KEY-----", "")
                                 .replaceAll("\\s", "");
-
-                        logger.debug("JwtService: Decoded public key base64 content: {}", key);
-
                         byte[] decoded = Base64.getDecoder().decode(key);
                         X509EncodedKeySpec keySpec = new X509EncodedKeySpec(decoded);
-                        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
-                        publicKey = keyFactory.generatePublic(keySpec);
-
-                        logger.info("JwtService: Public key loaded successfully");
-
+                        publicKey = KeyFactory.getInstance("RSA").generatePublic(keySpec);
+                        if (!(publicKey instanceof RSAPublicKey)) {
+                            throw new IllegalStateException("Public key is not RSA");
+                        }
+                        log.info("Public key loaded");
                     } catch (Exception e) {
-                        logger.error("JwtService: Failed to load public key", e);
                         throw new RuntimeException("Unable to load public key", e);
                     }
                 }
@@ -54,33 +55,31 @@ public class JwtService {
         return publicKey;
     }
 
-    public boolean isValid(String token) {
+    /** Parse + vérifie la signature. Résultat mis en cache par token. */
+    public Claims parseAndValidate(String token) {
+        Claims cached = tokenClaimsCache.getIfPresent(token);
+        if (cached != null) return cached;
         try {
-            logger.debug("JwtService: Validating JWT token");
-            Jwts.parserBuilder()
-                    .setSigningKey(getPublicKey())
-                    .build()
-                    .parseClaimsJws(token);
-            logger.debug("JwtService: Token is valid");
-            return true;
-        } catch (Exception e) {
-            logger.warn("JwtService: Invalid token - {}", e.getMessage());
-            return false;
-        }
-    }
-
-    public String extractEmail(String token) {
-        try {
-            logger.debug("JwtService: Extracting email from token");
-            return Jwts.parserBuilder()
+            Claims claims = Jwts.parserBuilder()
                     .setSigningKey(getPublicKey())
                     .build()
                     .parseClaimsJws(token)
-                    .getBody()
-                    .getSubject();
-        } catch (Exception e) {
-            logger.error("JwtService: Failed to extract email from token", e);
-            throw new RuntimeException("Failed to extract email from token", e);
+                    .getBody();
+            tokenClaimsCache.put(token, claims);
+            return claims;
+        } catch (ExpiredJwtException e) {
+            log.debug("JWT expired");
+            throw e;
+        } catch (SignatureException e) {
+            log.debug("JWT signature invalid");
+            throw e;
+        } catch (JwtException e) {
+            log.debug("JWT invalid: {}", e.getMessage());
+            throw e;
         }
+    }
+
+    public String extractSubject(String token) {
+        return parseAndValidate(token).getSubject();
     }
 }
