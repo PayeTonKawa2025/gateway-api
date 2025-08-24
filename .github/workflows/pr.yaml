@@ -1,0 +1,95 @@
+name: Pull Request Workflow
+
+on:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inject public keys
+        run: |
+          mkdir -p src/main/resources
+          echo "${{ secrets.PUBLIC_KEY }}" > src/main/resources/public.pem
+
+      - name: Vérifier présence des clés PEM
+        run: |
+          echo "Contenu de src/main/resources :"
+          ls -l src/main/resources
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Cache Maven packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+
+      - name: Run Tests and Coverage
+        run: mvn clean verify -Dspring.profiles.active=test
+
+      - name: Upload JaCoCo report
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/jacoco.xml
+
+  sonar:
+    name: SonarQube Analysis
+    runs-on: ubuntu-latest
+    needs: build
+    if: success()
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Cache Maven packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+
+      - name: Cache SonarQube scanner
+        uses: actions/cache@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+
+      - name: Compile project
+        run: mvn clean compile test-compile -DskipTests
+
+      - name: Download JaCoCo report
+        uses: actions/download-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco
+
+      - name: Build and analyze on SonarCloud
+        run: |
+          mvn verify -DskipTests=true sonar:sonar \
+            -Dsonar.projectKey=PayeTonKawa2025_gateway-api \
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }} \
+            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
+            -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
+            -Dsonar.pullrequest.key=${{ github.event.pull_request.number }} \
+            -Dsonar.pullrequest.branch=${{ github.head_ref }} \
+            -Dsonar.pullrequest.base=${{ github.base_ref }} \
+            -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
+            -Dsonar.coverage.exclusions=**/controller/**,**/config/**
