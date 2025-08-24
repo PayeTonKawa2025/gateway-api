@@ -84,3 +84,31 @@ jobs:
           owner="${{ github.repository_owner }}"
           lower_owner="${owner,,}"
           mvn compile jib:build -DskipTests -Djib.to.image=ghcr.io/${lower_owner}/gateway-api:${{ needs.tag.outputs.new_tag }}
+
+  prod_deploy:
+    runs-on: ubuntu-latest
+    needs: [build-docker, tag]
+
+    steps:
+      - name: Checkout GitOps repo
+        uses: actions/checkout@v3
+        with:
+          repository: PayeTonKawa2025/infra-gitops
+          token: ${{ secrets.CI_TOKEN }}
+          path: gitops
+
+      - name: Update file with tag
+        run: |
+          cd gitops
+          yq -i '
+            .spec.source.helm.values |= (
+              from_yaml
+                | .image.tag = "${{ needs.tag.outputs.new_tag }}"
+              | to_yaml
+          )' apps/payetonkawa/gateway-api.yaml
+          cat apps/payetonkawa/gateway-api.yaml
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add apps/payetonkawa/gateway-api.yaml
+          git commit -m "feat(gateway-api): deploy ${{ needs.tag.outputs.new_tag }}"
+          git push origin main
